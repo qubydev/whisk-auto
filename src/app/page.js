@@ -21,9 +21,11 @@ import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Slider } from "@/components/ui/slider";
 
 const DEFAULT_CONFIG = {
   aspectRatio: 'IMAGE_ASPECT_RATIO_LANDSCAPE',
+  requestDelay: 1000,
 };
 
 export default function Page() {
@@ -151,8 +153,9 @@ export default function Page() {
     let completedTasks = 0;
     setGenStats({ done: 0, total: totalTasks });
 
-    for (const basePrompt of rawPrompts) {
+    for (let i = 0; i < rawPrompts.length; i++) {
       if (stopProcessingRef.current) break;
+      const basePrompt = rawPrompts[i];
 
       const batchId = Date.now().toString() + Math.random().toString().slice(2, 6);
 
@@ -226,6 +229,10 @@ export default function Page() {
       completedTasks++;
       setProgress((completedTasks / totalTasks) * 100);
       setGenStats({ done: completedTasks, total: totalTasks });
+
+      if (i < rawPrompts.length - 1 && !stopProcessingRef.current) {
+        await new Promise(resolve => setTimeout(resolve, config.requestDelay));
+      }
     }
 
     setIsGenerating(false);
@@ -353,16 +360,35 @@ export default function Page() {
 
                       <Separator />
 
-                      <div className="space-y-2">
-                        <Label>Aspect Ratio</Label>
-                        <Select value={config.aspectRatio} onValueChange={(v) => updateConfig('aspectRatio', v)} disabled={isGenerating}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="IMAGE_ASPECT_RATIO_LANDSCAPE">Horizontal (16:9)</SelectItem>
-                            <SelectItem value="IMAGE_ASPECT_RATIO_PORTRAIT">Vertical (9:16)</SelectItem>
-                            <SelectItem value="IMAGE_ASPECT_RATIO_SQUARE">Square (1:1)</SelectItem>
-                          </SelectContent>
-                        </Select>
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <Label>Aspect Ratio</Label>
+                          <Select value={config.aspectRatio} onValueChange={(v) => updateConfig('aspectRatio', v)} disabled={isGenerating}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="IMAGE_ASPECT_RATIO_LANDSCAPE">Horizontal (16:9)</SelectItem>
+                              <SelectItem value="IMAGE_ASPECT_RATIO_PORTRAIT">Vertical (9:16)</SelectItem>
+                              <SelectItem value="IMAGE_ASPECT_RATIO_SQUARE">Square (1:1)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-3 pt-2">
+                          <div className="flex justify-between items-center">
+                            <Label>Request Delay</Label>
+                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                              {config.requestDelay}ms
+                            </span>
+                          </div>
+                          <Slider
+                            min={100}
+                            max={5000}
+                            step={100}
+                            value={[config.requestDelay]}
+                            onValueChange={(val) => updateConfig('requestDelay', val[0])}
+                            disabled={isGenerating}
+                          />
+                        </div>
                       </div>
                     </CardContent>
                   </CollapsibleContent>
