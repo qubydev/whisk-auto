@@ -6,7 +6,7 @@ import {
   Loader2, Play, Download, Trash2, CheckSquare, Square,
   Settings2, Key, Save, Edit3, Image as ImageIcon,
   ChevronDown, ChevronUp, XCircle, CheckCircle2, AlertTriangle, X, StopCircle,
-  AlertCircle, Copy, Maximize2
+  AlertCircle, Copy, Maximize2, RotateCcw, FileJson
 } from 'lucide-react';
 import Logo from '@/components/Logo';
 
@@ -35,7 +35,9 @@ export default function Page() {
   const [tokenStatus, setTokenStatus] = useState('idle');
   const [isConfigSaved, setIsConfigSaved] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
+
   const [previewImage, setPreviewImage] = useState(null);
+  const [viewingError, setViewingError] = useState(null);
 
   const [config, setConfig] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -134,7 +136,7 @@ export default function Page() {
     toast("Stopping after current task...", { icon: '🛑' });
   };
 
-  const handleGenerate = async () => {
+  const processQueue = async (promptsToProcess) => {
     if (!isConfigSaved || !sessionToken) {
       toast.error("Configure session first.");
       setIsConfigOpen(true);
@@ -142,20 +144,17 @@ export default function Page() {
     }
     if (tokenStatus === 'expired') return toast.error("Session expired.");
 
-    const rawPrompts = promptsInput.split('---').map(p => p.trim()).filter(p => p.length > 0);
-    if (rawPrompts.length === 0) return toast.error("Enter at least one prompt.");
-
     setIsGenerating(true);
     setProgress(0);
     stopProcessingRef.current = false;
 
-    const totalTasks = rawPrompts.length;
+    const totalTasks = promptsToProcess.length;
     let completedTasks = 0;
     setGenStats({ done: 0, total: totalTasks });
 
-    for (let i = 0; i < rawPrompts.length; i++) {
+    for (let i = 0; i < promptsToProcess.length; i++) {
       if (stopProcessingRef.current) break;
-      const basePrompt = rawPrompts[i];
+      const basePrompt = promptsToProcess[i];
 
       const batchId = Date.now().toString() + Math.random().toString().slice(2, 6);
 
@@ -182,14 +181,22 @@ export default function Page() {
         if (!response.ok) {
           if (response.status === 401) setTokenStatus('expired');
 
-          let errorMsg = `Failed to generate image! Error: ${response.status}`;
+          let errorDetails = null;
+          let errorMsg = `HTTP Error: ${response.status}`;
+
           try {
-            const errorData = await response.json();
-            if (errorData?.detail) {
-              errorMsg = errorData.detail;
+            const text = await response.text();
+            try {
+              errorDetails = JSON.parse(text);
+              if (errorDetails.detail) errorMsg = errorDetails.detail;
+            } catch {
+              errorDetails = text;
             }
           } catch (e) { }
-          throw new Error(errorMsg);
+
+          const customError = new Error(errorMsg);
+          customError.data = errorDetails;
+          throw customError;
         }
 
         const data = await response.json();
@@ -214,14 +221,21 @@ export default function Page() {
             return newArr;
           });
         } else {
-          throw new Error("No images in response");
+          const customError = new Error("No images in response");
+          customError.data = data;
+          throw customError;
         }
 
       } catch (error) {
         console.error(error);
         setResults(prev => prev.map(item =>
           item.id === batchId
-            ? { ...item, type: 'error', error: error.message || "Failed" }
+            ? {
+              ...item,
+              type: 'error',
+              error: error.message || "Failed",
+              errorData: error.data || null
+            }
             : item
         ));
       }
@@ -230,7 +244,7 @@ export default function Page() {
       setProgress((completedTasks / totalTasks) * 100);
       setGenStats({ done: completedTasks, total: totalTasks });
 
-      if (i < rawPrompts.length - 1 && !stopProcessingRef.current) {
+      if (i < promptsToProcess.length - 1 && !stopProcessingRef.current) {
         await new Promise(resolve => setTimeout(resolve, config.requestDelay));
       }
     }
@@ -240,10 +254,31 @@ export default function Page() {
     if (completedTasks === totalTasks) toast.success("Queue finished.");
   };
 
+  const handleStartGeneration = () => {
+    const rawPrompts = promptsInput.split('---').map(p => p.trim()).filter(p => p.length > 0);
+    if (rawPrompts.length === 0) return toast.error("Enter at least one prompt.");
+    processQueue(rawPrompts);
+  };
+
+  const handleRetry = (id, prompt) => {
+    setResults(prev => prev.filter(item => item.id !== id));
+    processQueue([prompt]);
+  };
+
+  const handleRetryFailed = () => {
+    const failedItems = results.filter(r => r.type === 'error');
+    if (failedItems.length === 0) return toast.success("No failed items to retry.");
+
+    const promptsToRetry = failedItems.map(r => r.prompt);
+
+    setResults(prev => prev.filter(r => r.type !== 'error'));
+
+    toast(`Retrying ${promptsToRetry.length} failed items...`);
+    processQueue(promptsToRetry);
+  };
+
   const toggleSelection = (id) => setResults(prev => prev.map(img => (img.type === 'image' && img.id === id) ? { ...img, selected: !img.selected } : img));
-
   const handleSelectAll = (select) => setResults(prev => prev.map(img => img.type === 'image' ? { ...img, selected: select } : img));
-
   const deleteSelected = () => setResults(prev => prev.filter(img => !img.selected));
 
   const clearErrors = () => {
@@ -414,7 +449,7 @@ export default function Page() {
                   <StopCircle className="w-5 h-5 mr-2 animate-pulse" /> Stop Processing
                 </Button>
               ) : (
-                <Button size="lg" className="w-full" onClick={handleGenerate}>
+                <Button size="lg" className="w-full" onClick={handleStartGeneration}>
                   <Play className="w-5 h-5 mr-2" /> Start Generating
                 </Button>
               )}
@@ -437,6 +472,17 @@ export default function Page() {
                   </span>
                 </div>
                 <div className="flex gap-2">
+                  {results.some(r => r.type === 'error') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRetryFailed}
+                      className="border-orange-200 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-900/50 dark:text-orange-400 dark:hover:bg-orange-900/20"
+                    >
+                      <RotateCcw className="w-4 h-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Retry Failed</span>
+                    </Button>
+                  )}
                   {results.some(r => r.type === 'error') && (
                     <Button
                       variant="outline"
@@ -480,10 +526,22 @@ export default function Page() {
                       )}
 
                       {item.type === 'error' && (
-                        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-red-500/5 cursor-default">
+                        <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-red-500/5 cursor-default relative">
                           <AlertCircle className="w-8 h-8 text-red-500 mb-2" />
                           <span className="text-xs font-bold text-red-600 dark:text-red-400">Failed</span>
-                          <p className="text-[10px] text-red-500/80 mt-1 line-clamp-3 break-all">{item.error}</p>
+                          <p className="text-[10px] text-red-500/80 mt-1 line-clamp-2 break-all">{item.error}</p>
+
+                          <div className="flex gap-2 mt-2">
+                            <Button size="icon" variant="outline" className="h-6 w-6 border-red-200 hover:bg-red-100" onClick={(e) => { e.stopPropagation(); handleRetry(item.id, item.prompt); }}>
+                              <RotateCcw className="w-3 h-3 text-red-600" />
+                            </Button>
+                            {item.errorData && (
+                              <Button size="icon" variant="outline" className="h-6 w-6 border-red-200 hover:bg-red-100" onClick={(e) => { e.stopPropagation(); setViewingError(item); }}>
+                                <FileJson className="w-3 h-3 text-red-600" />
+                              </Button>
+                            )}
+                          </div>
+
                           <Button variant="ghost" size="icon" className="absolute top-1 right-1 h-6 w-6" onClick={(e) => { e.stopPropagation(); removeCard(item.id); }}>
                             <X className="w-3 h-3" />
                           </Button>
@@ -606,6 +664,55 @@ export default function Page() {
                     )}
                   </div>
                 </ScrollArea>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {viewingError && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setViewingError(null)}>
+            <div className="bg-background border border-border rounded-xl max-w-2xl w-full max-h-[80vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-4 border-b">
+                <h3 className="font-semibold text-red-500 flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5" /> Error Details
+                </h3>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setViewingError(null)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+              <ScrollArea className="flex-1 p-4">
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-xs uppercase text-muted-foreground">Error Message</Label>
+                    <p className="text-sm font-medium text-red-600 mt-1">{viewingError.error}</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs uppercase text-muted-foreground">Prompt</Label>
+                    <p className="text-sm text-muted-foreground font-mono bg-muted/50 p-2 rounded mt-1">{viewingError.prompt}</p>
+                  </div>
+                  {viewingError.errorData && (
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <Label className="text-xs uppercase text-muted-foreground">Raw Response Data</Label>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copyToClipboard(JSON.stringify(viewingError.errorData, null, 2))}>
+                          <Copy className="w-3 h-3" />
+                        </Button>
+                      </div>
+                      <pre className="text-[10px] font-mono bg-slate-950 text-slate-50 p-4 rounded-lg overflow-auto max-h-96 whitespace-pre-wrap">
+                        {typeof viewingError.errorData === 'object'
+                          ? JSON.stringify(viewingError.errorData, null, 2)
+                          : viewingError.errorData}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+              <div className="p-4 border-t bg-muted/10 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setViewingError(null)}>Close</Button>
+                <Button variant="destructive" onClick={() => {
+                  handleRetry(viewingError.id, viewingError.prompt);
+                  setViewingError(null);
+                }}>Retry This Request</Button>
               </div>
             </div>
           </div>

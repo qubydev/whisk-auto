@@ -8,7 +8,7 @@ export default function Logo() {
             alt="Logo"
             height={100}
             width={100}
-            className='size-8 fixed bottom-10 right-10 border-2 shadow-sm'
+            className='size-10 fixed bottom-10 right-10 shadow-lg rounded-full p-1 border'
         />
     )
 }
