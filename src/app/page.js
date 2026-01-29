@@ -169,7 +169,7 @@ export default function Page() {
         const payload = {
           prompt: basePrompt,
           token: sessionToken,
-          aspectRatio: config.aspectRatio
+          aspect_ratio: config.aspectRatio
         };
 
         const response = await fetch("/api/generate", {
